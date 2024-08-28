@@ -1,0 +1,140 @@
+#
+# COPYRIGHT Ericsson 2020
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+# Default values for eric-ms-chassis.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+#global:
+#  timezone: UTC
+#  registry:
+#    url: armdocker.rnd.ericsson.se
+#  #Secret must be manually created in the namespace, no default value
+#  pullSecret: eric-adp-example-secret
+
+replicaCount: 1
+
+
+productInfo:
+  # R-State of the product. R State should match helm chart version (3.1.0 -> R2A)
+  # To automate it when packaging the helm chart rstate can be generated
+  # and below value replaced with correct R-Statei by e.g. Bob
+  rstate: RSTATE
+
+updateStrategy:
+ type: RollingUpdate
+ rollingUpdate:
+   maxSurge: 1
+   maxUnavailable: 0
+
+imageCredentials:
+  # repoPath include the image path relative to the registry url, excluding image name
+  # repoPath: sandbox/adp-staging/adp-cicd
+  #pullPolicy: IfNotPresent
+  pullPolicy: IfNotPresent
+  repoPath: REPO_PATH
+  registry:
+  # overrides global registry url
+    url:
+  #- Secret must be manually created in the namespace, no default value
+  # pullSecret: REPO_SECRET
+
+images:
+  chassis:
+    name: IMAGE_NAME
+    tag: VERSION
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations:
+    ericsson.com/product-name: "Microservice Chassis"
+    # TODO: Please change this product number to a valid one, once it is available.
+    ericsson.com/product-number: "CXC90001"
+    ericsson.com/product-revision: "{{ .Values.productInfo.rstate }}"
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 8080    # Changed from 80 to 8080 and spring application is hosted on 8080
+
+ingress:
+  enabled: false
+  # TODO: Please add in appropriate details while enabling the ingress
+  ingressClass:
+  annotations:
+    ericsson.com/product-name: "Microservice Chassis"
+    # TODO: Please change this product number to a valid one, once it is available.
+    ericsson.com/product-number: "CXC90001"
+    ericsson.com/product-revision: "{{ .Values.productInfo.rstate }}"
+
+  hosts:
+    - host: chart-example.local
+      paths: []
+
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+eric-pm-server:
+  rbac:
+    appMonitoring:
+      enabled: true
+
+prometheus:
+  path: /actuator/prometheus
+  scrape: true
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 250m
+  limits:
+    memory: 2Gi
+    cpu: 500m
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

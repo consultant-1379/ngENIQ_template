@@ -1,0 +1,621 @@
+#
+# COPYRIGHT Ericsson 2020
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+modelVersion: 2.0
+
+description: "Ericsson ADP Spring Microservice Template with Postgresql backend."
+
+# See image catalog: https://confluence.lmera.ericsson.se/display/ACD/ADP+CICD+Docker+Image+Catalog
+docker-images:
+  - adp-release-auto: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/bob-adp-release-auto:latest
+  - asciidoc-builder: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/bob-asciidocbuilder:latest
+  - adp-helm-dr-check: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/common-library-adp-helm-dr-check:latest
+  - doc-builder: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/bob-docbuilder:2.3.0-latest
+  - k8-test: armdocker.rnd.ericsson.se/proj_oss_releases/archtype-deploy:1.1
+  - maven-builder: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/bob-javamvnbuilder.minideb:latest
+  - zally-client: armdocker.rnd.ericsson.se/proj-cicd/sandbox/zally/zally-client:0.0.2
+
+import:
+  common: common-properties.yaml
+# List of constants
+properties:
+  - image-registry: armdocker.rnd.ericsson.se
+  - image-secret: armdocker
+  - image-drop-repopath: proj-eniq/proj-ceniq-chassis-drop
+  - image-dev-repopath: proj-eniq/proj-ceniq-chassis-dev
+  - image-ci-repopath: proj-eniq/proj-ceniq-chassis-ci-internal
+  - image-full-name: ${image-registry}/${image-drop-repopath}/${common.docker-image-name}
+
+  # Helm Chart name must follow the pattern: eric-[a-z0-9]{1,5}-[a-z0-9-]{1,30}
+  - helm-chart-repo-server: https://arm.seli.gic.ericsson.se/artifactory
+  - helm-chart-dev-repopath: proj-eniq-generic-local/proj-ngENIQ_template-dev-helm
+  - helm-chart-ci-repopath: proj-eniq-generic-local/proj-ngENIQ_template-ci-internal-helm
+  - helm-chart-drop-repopath: proj-eniq-generic-local/proj-ngENIQ_template-drop-helm
+  - helm-chart-drop-repo: ${helm-chart-repo-server}/${helm-chart-drop-repopath}
+
+  # Functional ID for your Team or CI group to push to Gerrit repo
+  - git-user: lciadm100
+  - git-repo-path: OSS/ENIQ-CR-Parent/cENIQ/Data_Ingress/ngENIQ_template
+  - git-repo-url: ssh://${git-user}@gerrit.ericsson.se:29418/${git-repo-path}
+  - git-repo: https://gerrit.ericsson.se/#/admin/projects/${git-repo-path}
+
+  - system-test-from-version: 1.0.0-53
+  - docker-network-flags: --network="host"
+  - skipped-design-rules: "-DhelmDesignRule.config.drHc001=skip"
+  - jar-file-name: ceniq-chassis-1.0.0-SNAPSHOT.jar
+  - sonar-properties: "-Dsonar.login=${env.SONAR_AUTH_TOKEN}
+      -Dsonar.host.url=${env.SONAR_HOST_URL}
+      -Dsonar.java.binaries=target/classes
+      -Dsonar.junit.reportsPath=target/surefire-reports
+      -Dsonar.surefire.reportsPath=target/surefire-reports
+      -Dsonar.java.coveragePlugin=jacoco
+      -Ddockerfile.skip
+      -Dsonarcoverage.jacoco.xmlReportPaths=target"
+
+# Import environment variables (e.g. Jenkins parameters)
+env:
+  - PWD
+  - HOME
+  - USER (default=local)
+  - RELEASE (default=false)
+  - KUBECONFIG (default=$HOME/.kube/config)
+  - HELM_REPO_API_TOKEN (default="AKCp8ih1PGhGBLWV4G8871LqpLvU15DMhtuAYtxhJ5HPsYgDe8YJ7BPZ48KDKayigemsWHrNJ")
+  - GERRIT_PATCHSET_REVISION (default=HEAD)
+  - GERRIT_USERNAME
+  - GERRIT_PASSWORD
+  - GERRIT_CHANGE_NUMBER
+  - JIRA_USERNAME
+  - JIRA_PASSWORD
+  - ERIDOC_USERNAME
+  - ERIDOC_PASSWORD
+  - DOCKER_CONFIG (default=$HOME/.docker/config.json)
+  - K8_NAMESPACE (default=$USER-default-namespace)
+  - HELM_RELEASE (default=$USER-release)
+  - ZALLY_URL (default=http://10.45.204.215:8000/)
+
+  # For SonarQube
+  - SONAR_AUTH_TOKEN (default="113e5fae4d562c6b79bca47a56870206c2cff446")
+  - SONAR_HOST_URL (default="https://sonarqube.lmera.ericsson.se")
+  - SONAR_TARGET_BRANCH (default="master")
+  - SONAR_BRANCH (default="master")
+
+# Variables, set by below tasks
+var:
+  - version
+  - rstate
+  - commithash
+  - image-repopath-internal
+  - image-full-name-internal
+  - helm-chart-repo-internal
+  - gitroot
+  - submodparam
+  - pri_params
+  - version_prefix
+  - docker_config_basepath
+
+# Rules to execute
+rules:
+  # An Integrated rule to execute everything in one place.
+  release:
+    - rule: clean
+    - rule: init-dev
+    - rule: lint
+    - rule: build
+    - rule: unit
+    - rule: image
+    - rule: package
+
+  # Clean workspace
+  clean:
+    - task: rm
+      cmd:
+        - rm -rf .bob/
+        - rm -rf build/
+    - task: mvn-clean
+      docker-image: maven-builder
+      docker-flags:
+        - "--volume ${env.HOME}:${env.HOME}"
+      cmd: mvn -Duser.home=${env.HOME} clean
+        -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+
+  # Dev Tasks: only used by manually publishing development/black builds by developers
+  init-dev:
+    - task: version
+      docker-image: adp-release-auto
+      cmd: generate-version --is-release false --output version
+    - task: rstate
+      docker-image: adp-release-auto
+      cmd: get_rstate.py ${var.version} > .bob/var.rstate
+    - task: commit
+      docker-image: adp-release-auto
+      cmd: git rev-parse --short HEAD > .bob/var.commithash
+    - task: image-repopath-internal
+      cmd: echo "${image-dev-repopath}" > .bob/var.image-repopath-internal
+    - task: image-full-name-internal
+      cmd: echo "${image-registry}/${image-dev-repopath}/${common.docker-image-name}" > .bob/var.image-full-name-internal
+    - task: helm-chart-repo-internal
+      cmd: echo "${helm-chart-repo-server}/${helm-chart-dev-repopath}" > .bob/var.helm-chart-repo-internal
+    - task: set-upload
+      cmd: echo "--debug" > .bob/var.pri_params
+
+  # CI-Internal Tasks: used by CI to use as temporary storage for testing, only CI user has write access.
+  init-review:
+    - task: version
+      docker-image: adp-release-auto
+      cmd: generate-version --is-release false --output version
+    - task: rstate
+      docker-image: adp-release-auto
+      cmd: get_rstate.py ${var.version} > .bob/var.rstate
+    - task: commit
+      docker-image: adp-release-auto
+      cmd: git rev-parse --short HEAD > .bob/var.commithash
+    - task: image-repopath-internal
+      cmd: echo "${image-ci-repopath}" > .bob/var.image-repopath-internal
+    - task: image-full-name-internal
+      cmd: echo "${image-registry}/${image-ci-repopath}/${common.docker-image-name}" > .bob/var.image-full-name-internal
+    - task: helm-chart-repo-internal
+      cmd: echo "${helm-chart-repo-server}/${helm-chart-ci-repopath}" > .bob/var.helm-chart-repo-internal
+    - task: set-upload
+      cmd: echo "--debug" > .bob/var.pri_params
+
+  # Drop level tasks: used by CI to publish artifacts after successful CI pipeline execution for a drop build
+  init-drop:
+    - task: version
+      docker-image: adp-release-auto
+      cmd: generate-version --is-release true --output version
+    - task: rstate
+      docker-image: adp-release-auto
+      cmd: get_rstate.py ${var.version} > .bob/var.rstate
+    - task: commit
+      docker-image: adp-release-auto
+      cmd: git rev-parse --short HEAD > .bob/var.commithash
+    - task: image-repopath-internal
+      cmd: echo "${image-ci-repopath}" > .bob/var.image-repopath-internal
+    - task: image-full-name-internal
+      cmd: echo "${image-registry}/${image-ci-repopath}/${common.docker-image-name}" > .bob/var.image-full-name-internal
+    - task: helm-chart-repo-internal
+      cmd: echo "${helm-chart-repo-server}/${helm-chart-ci-repopath}" > .bob/var.helm-chart-repo-internal
+    - task: set-upload
+      cmd: echo "--debug --upload" > .bob/var.pri_params
+    - task: adp-artifacts-properties
+      docker-image: adp-release-auto
+      cmd: generate-adp-artifacts
+        --chart-name ${common.helm-chart-name}
+        --chart-version ${var.version}
+        --chart-repo ${helm-chart-drop-repo}
+        --image-name ${common.docker-image-name}
+        --image-version ${var.version}
+        --image-repo "${image-registry}/${var.image-repopath-internal}"
+    - task: write-git-details
+      cmd:
+        - echo "GIT_TAG=$(git log -1 --pretty=format:'%h')" >> artifact.properties
+        - echo "GIT_COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an')" >> artifact.properties
+        - echo "GIT_COMMIT_SUMMARY=$(git log -1 --pretty=format:'%s')" >> artifact.properties
+  license:
+    - task: check
+      docker-image: maven-builder
+      docker-flags:
+        - "--volume ${env.HOME}:${env.HOME}"
+      cmd:
+        mvn license:check -Ddockerfile.skip -DskipTests=true -Duser.home=${env.HOME}
+        -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+
+    - task: format
+      docker-image: maven-builder
+      docker-flags:
+        - "--volume ${env.HOME}:${env.HOME}"
+      cmd:
+        mvn license:format -Ddockerfile.skip -DskipTests=true -Duser.home=${env.HOME}
+        -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+  lint:
+    - task: markdownlint
+      docker-image: doc-builder
+      cmd: bash -c 'markdownlint --config /etc/markdownlint-cli/adp.yaml $(git ls-files -- \*\.md | cat | xargs)' || true
+    - task: vale
+      docker-image: doc-builder
+      cmd: bash -c 'vale --output line --no-wrap $(git ls-files -- \*\.md | cat | xargs)' || true
+    - task: helm
+      docker-image: adp-helm-dr-check
+      docker-flags:
+        - -e ENABLE_HELM_V3=true
+      cmd: helm3 lint charts/${common.helm-chart-name}
+    - task: helm-chart-check
+      docker-image: adp-helm-dr-check
+      cmd: helm-dr-check --helm-chart charts/${common.helm-chart-name} ${skipped-design-rules} --helm-v3 --output .bob/
+    - task: lint-api-schema
+      docker-image: zally-client
+      docker-flags:
+        - "--env ZALLY_URL=${env.ZALLY_URL}"
+        - "--network='host'"
+      cmd: lint src/main/resources/v1/microservice-chassis-openapi.yaml > zally-api-lint-report.txt || true
+    - task: check-license
+      docker-image: maven-builder
+      docker-flags:
+        - "--volume ${env.HOME}:${env.HOME}"
+      cmd:
+        mvn license:check -Ddockerfile.skip -DskipTests=true -Duser.home=${env.HOME}
+        -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+    - task: checkstyle
+      docker-image: maven-builder
+      docker-flags:
+        - "--volume ${env.HOME}:${env.HOME}"
+      cmd:
+        mvn checkstyle:check -Ddockerfile.skip -DskipTests=true -Duser.home=${env.HOME}
+        -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+    - task: helm-dry-run-install
+      docker-image: adp-helm-dr-check
+      docker-flags:
+        - --env ENABLE_HELM_V3=true
+        - "--volume ${env.HOME}/:${env.HOME}/"
+      cmd:
+        - helm3 version --kubeconfig ${env.HOME}/.kube/config || true
+        - helm3 install ${common.helm-chart-name} charts/${common.helm-chart-name} --debug --dry-run --kubeconfig ${env.HOME}/.kube/config > helm-install-dry-run.log || true
+
+  # Generate documents: cpi sdifs and raml hml doc
+  generate-docs:
+    - task: asciidoc-to-sdif
+      docker-image: asciidoc-builder
+      cmd: /adp_build_doc.sh --project-dir=${env.PWD} --build-dir=${env.PWD}/build
+    - task: prepare-for-marketplace
+      docker-image: adp-release-auto
+      cmd:
+        bash -c 'for i in $(find ./build/doc -maxdepth 1 ! -path ./build/doc -type d);
+        do
+        package_html.py -i $i/html -o $i/$(basename $i)_HTML.zip;
+        done'
+
+  evms-csv-generation:
+    - task: evms-registration
+      docker-image: adp-release-auto
+      cmd: dependencies generate --evms
+        --format csv
+        --evms-product-name 'Catfacts Text Analyzer 1.x'
+        --evms-product-version ${var.version}
+        -out ./
+        --dependencies ci_config/dependencies.yaml
+
+  # Dryrun eridoc upload
+  eridoc-dryrun:
+    # Check if eridoc_config.yaml is OK
+    - task: dryrun
+      docker-image: adp-release-auto
+      docker-flags:
+        - --env ERIDOC_USERNAME
+        - --env ERIDOC_PASSWORD
+      cmd: eridoc upload --config ./ci_config/eridoc_config.yaml --debug --no-validate-certificates --dry-run
+
+  # Upload eridoc documents to Eridoc
+  eridoc-upload:
+    # Check if eridoc_config.yaml is OK
+    - task: eridoc-upload
+      docker-image: adp-release-auto
+      docker-flags:
+        - --env ERIDOC_USERNAME
+        - --env ERIDOC_PASSWORD
+      cmd: eridoc upload --config ./ci_config/eridoc_config.yaml --debug --no-validate-certificates
+
+  # Approve uploaded documents in Eridoc
+  eridoc-approve:
+    # Check if eridoc_config.yaml is OK
+    - task: eridoc-approve
+      docker-image: adp-release-auto
+      docker-flags:
+        - --env ERIDOC_USERNAME
+        - --env ERIDOC_PASSWORD
+      cmd: eridoc approve --config ./ci_config/eridoc_config.yaml --debug --no-validate-certificates
+
+  # Build java source code and package jar file, no need image building at this stage
+  build:
+    - task: mvn-package
+      docker-image: maven-builder
+      docker-flags:
+        - "--volume ${env.HOME}:${env.HOME}"
+      cmd:
+        mvn -Duser.home=${env.HOME} clean install -Ddockerfile.skip -DskipTests=true
+        -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+
+  # Run Unit test cases only
+  # passwd is loaded as volume because test cases use flyway DB which uses embedded PostgreSQL and
+  # Embedded pgSQL installation requires non-root user for its installation.
+  unit:
+    - task: mvn-package
+      docker-image: maven-builder
+      docker-flags:
+        - -v /etc/passwd:/etc/passwd:ro
+        - "--volume ${env.HOME}:${env.HOME}"
+      cmd: mvn -Duser.home=${env.HOME} test
+        -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+
+  contract-tests:
+    - task: mvn-contract-tests
+      docker-image: maven-builder
+      docker-flags:
+        - "--volume ${env.HOME}:${env.HOME}"
+      cmd:
+        mvn -Duser.home=${env.HOME} clean install -PrunContractTests  -Ddockerfile.skip -Djacoco.skip=true
+        -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+
+  # Build a docker image pointing to dirty repository
+  image:
+    - task: docker-build
+      cmd: docker build ${env.PWD}
+        --file Dockerfile
+        --tag ${var.image-full-name-internal}:${var.version}
+        --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+        --build-arg COMMIT=${var.commithash}
+        --build-arg APP_VERSION=${var.version}
+        --build-arg JAR_FILE=${jar-file-name}
+
+  # Push image to ci-internal repo and create local version of helm chart
+  package-local:
+    - task: image-push-internal
+      cmd: sudo docker push ${var.image-full-name-internal}:${var.version}
+    - task: package-helm-internal
+      docker-image: adp-release-auto
+      docker-flags:
+        - --env ENABLE_HELM_V3=true
+      cmd: helm-package
+        --folder charts/${common.helm-chart-name}
+        --workdir .bob --output .bob/${common.helm-chart-name}-internal
+        --version ${var.version}
+        --replace VERSION=${var.version}
+        --replace RSTATE=${var.rstate}
+        --replace REPO_PATH=${var.image-repopath-internal}
+        --replace IMAGE_NAME=${common.docker-image-name}
+        --replace REPO_URL=${image-registry}
+
+  # Push image to ci-internal repo, create internal version of helm chart and pushes it to internal repo
+  package:
+    - rule: package-local
+    - task: helm-upload-internal
+      docker-image: adp-release-auto
+      docker-flags:
+        - --env ENABLE_HELM_V3=true
+      cmd: upload_file.sh
+        --filename=.bob/${common.helm-chart-name}-internal/${common.helm-chart-name}-${var.version}.tgz
+        --repository=${var.helm-chart-repo-internal}/${common.helm-chart-name}
+        --api-token=${env.HELM_REPO_API_TOKEN}
+
+  # Publish *eridoc docs, docker images and helm charts to drop repository
+  # (*) Commented out
+  # Call publish only when merged to master
+  publish:
+    # Uncomment below lines once you have eridoc related activities
+    #
+    # - task: eridoc-upload
+    #   docker-image: adp-release-auto
+    #   docker-flags:
+    #     - --env ERIDOC_USERNAME
+    #     - --env ERIDOC_PASSWORD
+    #   cmd: eridoc upload --config ./ci_config/eridoc_config.yaml --debug --no-validate-certificates
+    #
+    #   Note: Here REPO_PATH must contain fully qualified image name
+    #         in the format <Docker Registry>/<Repo path>/<Image Name>
+    - task: package-helm-public
+      docker-image: adp-release-auto
+      docker-flags:
+        - --env ENABLE_HELM_V3=true
+      cmd: helm-package
+        --folder charts/${common.helm-chart-name}
+        --workdir .bob --output build
+        --version ${var.version}
+        --replace VERSION=${var.version}
+        --replace REPO_PATH=${image-full-name}
+        --replace RSTATE=${var.rstate}
+        --replace REPO_URL=${image-registry}
+    - task: image-pull-internal
+      cmd: docker pull ${var.image-full-name-internal}:${var.version}
+    - task: image-tag-public
+      cmd: docker tag ${var.image-full-name-internal}:${var.version} ${image-full-name}:${var.version}
+    - task: image-push-public
+      cmd: docker push ${image-full-name}:${var.version}
+    - task: git-tag
+      cmd:
+        - git tag -af ${var.version} -m "Release ${var.version}"
+        - git remote set-url origin ${git-repo-url}
+        - git push origin ${var.version} || true
+    - task: helm-upload
+      docker-image: adp-release-auto
+      docker-flags:
+        - --env ENABLE_HELM_V3=true
+      cmd: upload_file.sh
+        --filename=build/${common.helm-chart-name}-${var.version}.tgz
+        --repository=${helm-chart-drop-repo}/${common.helm-chart-name}
+        --api-token=${env.HELM_REPO_API_TOKEN}
+
+  setup-secrets:
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker_config_basepath
+    - task: create-namespace-if-not-exists
+      docker-image: k8-test
+      docker-flags:
+        - "--env KUBECONFIG=/tmp/admin.conf"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:/tmp/admin.conf:ro"
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--volume ${env.HOME}/.helm:${env.HOME}/.helm"
+        - "--volume ${var.docker_config_basepath}:${var.docker_config_basepath}"
+      cmd: kubectl create namespace ${env.K8_NAMESPACE} || true
+    - task: setup-secrets
+      docker-image: k8-test
+      docker-flags:
+        - "--env KUBECONFIG=/tmp/admin.conf"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:/tmp/admin.conf:ro"
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--volume ${env.HOME}/.helm:${env.HOME}/.helm"
+        - "--volume ${var.docker_config_basepath}:${var.docker_config_basepath}"
+      cmd: kubectl create secret generic ${image-secret}
+        --from-file=.dockerconfigjson=${env.DOCKER_CONFIG}
+        --type=kubernetes.io/dockerconfigjson
+        --namespace ${env.K8_NAMESPACE} || true
+
+  helm-install:
+    - rule: setup-secrets
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker_config_basepath
+    - task: install-on-kubernetes
+      docker-image: k8-test
+      docker-flags:
+        - "--env KUBECONFIG=/tmp/admin.conf"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:/tmp/admin.conf:ro"
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--volume ${env.HOME}/.helm:${env.HOME}/.helm"
+        - "--volume ${var.docker_config_basepath}:${var.docker_config_basepath}"
+      cmd: helm install ${env.HELM_RELEASE} .bob/${common.helm-chart-name}-internal/${common.helm-chart-name}-${var.version}.tgz --namespace ${env.K8_NAMESPACE} --set eric-log-shipper.logshipper.autodiscover.namespace=${env.K8_NAMESPACE} --set imageCredentials.pullSecret=${image-secret} --set global.registry.url=${image-registry}
+
+  helm-delete:
+    - task: delete-release
+      docker-image: k8-test
+      docker-flags:
+        - "--env KUBECONFIG=/tmp/admin.conf"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:/tmp/admin.conf:ro"
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--volume ${env.HOME}/.helm:${env.HOME}/.helm"
+        - "--volume ${var.docker_config_basepath}:${var.docker_config_basepath}"
+      cmd: helm delete ${env.HELM_RELEASE} --namespace ${env.K8_NAMESPACE}
+
+  # Run SonarQube Branch Analysis on current branch
+  # This only works for Enterprise Edition of SonarQube which allows Branch Analysis.
+  # Ensure that you are running this task on a branch. If you run this on a master it would throw an
+  # error.
+  #
+  # Command Line Arguments:
+  #  -Dsonar.login:    SonarQube Login Token, (optional)
+  #  -Dsonar.host.url: SonarQube URL
+  #  -Dsonar.branch.name: Branch name with which SonarQube reports in the dashboard.
+  #  -Dsonar.branch.target: Target branch (by default, master) to which the code must be merged.
+  #  -Dsonar.projectVersion: Project version is to differentiate SonarQube results from one
+  #                          developer run to another. projectVersion is determined as
+  #                          "Version Prefix"-"Gerrit Change Number", eg: 1.0.0-5532279
+  #  -Ddockerfile.skip: Project specific flag to skip docker image creation
+  #  -Dsonarcoverage.jacoco.xmlReportPaths: Path to JaCoCo reports for code coverage
+  #  -Duser.home: Home directory to be used when sonar run in a container
+  sonar-enterprise: #sonar-branch
+    - task: sonarqube-analysis
+      docker-image: maven-builder
+      docker-flags:
+        - -v /etc/passwd:/etc/passwd:ro
+        - "--volume ${env.HOME}:${env.HOME}"
+      cmd:
+        mvn -Duser.home=${env.HOME} clean package org.sonarsource.scanner.maven:sonar-maven-plugin:3.2:sonar
+        ${sonar-properties}
+        -Dsonar.branch.name=${env.SONAR_BRANCH}
+        -Dsonar.branch.target=${env.SONAR_TARGET_BRANCH}
+        -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=debug
+
+  # Run SonarQube Full Analysis
+  #
+  # Command Line Arguments:
+  #  -Dsonar.login:    SonarQube Login Token, (optional)
+  #  -Dsonar.host.url: SonarQube URL
+  #  -Dsonar.projectVersion: Project version is to differentiate SonarQube results from one
+  #                          developer run to another. projectVersion is determined as
+  #                          "Version Prefix"-"Gerrit Change Number", eg: 1.0.0-5532279
+  #  -Ddockerfile.skip: Project specific flag to skip docker image creation
+  #  -Dsonarcoverage.jacoco.xmlReportPaths: Path to JaCoCo reports for code coverage
+  #  -Duser.home: Home directory to be used when sonar run in a container
+  sonar: #sonar-branch
+    - task: generate-version-prefix
+      cmd: cat VERSION_PREFIX > .bob/var.version_prefix
+    - task: sonarqube-analysis
+      docker-image: maven-builder
+      docker-flags:
+        - -v /etc/passwd:/etc/passwd:ro
+        - "--volume ${env.HOME}:${env.HOME}"
+      cmd: mvn -T 5 -Duser.home=${env.HOME} sonar:sonar
+        ${sonar-properties}
+        -Dsonar.branch.name=${var.version_prefix}-${env.GERRIT_CHANGE_NUMBER}
+        -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=debug
+
+  system-test:
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker_config_basepath
+    - task: system-test
+      docker-image: k8-test
+      docker-flags:
+        - "--env KUBECONFIG=/tmp/admin.conf"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:/tmp/admin.conf:ro"
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--volume ${env.HOME}/.helm:${env.HOME}/.helm"
+        - "--volume ${var.docker_config_basepath}:${var.docker_config_basepath}"
+      cmd: ./deployAndUpgrade.py --kubernetes-admin-conf=/tmp/admin.conf
+        --kubernetes-namespace=${env.K8_NAMESPACE}
+        --chart-archive=.bob/${common.helm-chart-name}-internal/${common.helm-chart-name}-${var.version}.tgz
+        --helm-repo=${helm-chart-drop-repo}
+        --baseline_chart_version=${system-test-from-version}
+        --armdocker-config-json=${env.DOCKER_CONFIG}
+        --helm-v3
+
+  helm-dry-run:
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker_config_basepath
+    - task: helm-dry-run
+      docker-image: k8-test
+      docker-flags:
+        - "--env KUBECONFIG=/tmp/admin.conf"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:/tmp/admin.conf:ro"
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--volume ${env.HOME}/.helm:${env.HOME}/.helm"
+        - "--volume ${var.docker_config_basepath}:${var.docker_config_basepath}"
+      cmd: helm install --dry-run --debug .bob/${common.helm-chart-name}-internal/${common.helm-chart-name}-${var.version}.tgz --generate-name
+
+  create-namespace:
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker_config_basepath
+    - task: create-namespace
+      docker-image: k8-test
+      docker-flags:
+        - "--env KUBECONFIG=/tmp/admin.conf"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:/tmp/admin.conf:ro"
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--volume ${env.HOME}/.helm:${env.HOME}/.helm"
+        - "--volume ${var.docker_config_basepath}:${var.docker_config_basepath}"
+      cmd: kubectl create namespace ${env.K8_NAMESPACE}
+
+  delete-namespace:
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker_config_basepath
+    - task: delete-namespace
+      docker-image: k8-test
+      docker-flags:
+        - "--env KUBECONFIG=/tmp/admin.conf"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:/tmp/admin.conf:ro"
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--volume ${env.HOME}/.helm:${env.HOME}/.helm"
+        - "--volume ${var.docker_config_basepath}:${var.docker_config_basepath}"
+      cmd: kubectl delete namespace ${env.K8_NAMESPACE}
+
+  healthcheck:
+    - task: find-docker-config-basepath
+      cmd: dirname ${env.DOCKER_CONFIG} > .bob/var.docker_config_basepath
+    - task: healthcheck
+      docker-image: k8-test
+      docker-flags:
+        - "--env K8_NAMESPACE=${env.K8_NAMESPACE}"
+        - "--env KUBECONFIG=/tmp/admin.conf"
+        - "--env HOME=${env.HOME}"
+        - "--volume ${env.KUBECONFIG}:/tmp/admin.conf:ro"
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--volume ${env.HOME}/.helm:${env.HOME}/.helm"
+        - "--volume ${var.docker_config_basepath}:${var.docker_config_basepath}"
+      cmd: ./healthcheck.sh

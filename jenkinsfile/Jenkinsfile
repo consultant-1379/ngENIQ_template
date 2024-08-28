@@ -1,0 +1,114 @@
+pipeline {
+    agent {
+	node("ngENIQ_POC")
+    }
+    environment {
+        SERVICE_NAME = "ngENIQ_template"
+        /*CREDENTIALS_SEKA_ARTIFACTORY = credentials('ejenksonomArtifactoryApiKey')
+        CREDENTIALS_SEKI_ARTIFACTORY = credentials('ejenksonomArtifactoryApiKeySEKI')
+        CREDENTIALS_SQAPITOKEN_ECSON = credentials ('SQApiToken-ECSON')*/
+        // Remove .storageClassName=- fields when FLM`s Postgres is uplifted to the latest PRA version
+        HELM_CHART_REPO = "https://arm.seli.gic.ericsson.se/artifactory/proj-eniq-generic-local"
+        HELM_CHART_PACKAGED = "${WORKSPACE}/.bob/${SERVICE_NAME}-internal/*.tgz"
+        HELM_INSTALL_RELEASE_NAME = "${SERVICE_NAME}-install"
+        HELM_INSTALL_NAMESPACE = "${HELM_INSTALL_RELEASE_NAME}"
+        HELM_INSTALL_TIMEOUT = 3600
+        HELM3_INSTALL_TIMEOUT = "${HELM_INSTALL_TIMEOUT}s"
+        HELM_INSTALL_INT_RELEASE_NAME = "${SERVICE_NAME}-integration-test"
+        HELM_INSTALL_INT_NAMESPACE = "${HELM_INSTALL_INT_RELEASE_NAME}"
+        HELM_INT_CHART_DIRECTORY = "${WORKSPACE}/charts/${SERVICE_NAME}-integration"
+        // The mvn-npm-builder Dockerfile can be found in son-dev-utils under src/jenkins/docker-images/mvn-npm-builder-jdk11/Dockerfile
+        // TODO: update the artifactory from proj-ec-son-dev to proj-ec-son-ci-internal
+    }
+	stages {
+		stage('Prepare') {
+			steps {
+				echo "PrepareStage"
+				sh 'git clean -xdff'
+				sh 'git submodule sync'
+				sh 'git submodule update --init --recursive'
+				// Ensure that Bob has all of its dependencies.
+				sh './bob/bob -v'
+				}
+			}
+		 stage('Build') {
+         	  	 steps {
+				echo "Build Stage"
+               			 sh './bob/bob build'
+           			 }
+       			 }
+		stage('Init') {
+          	 	 steps {
+                		/*script {
+                    			if (env.RELEASE == 'false') {
+                        			sh './bob/bob init-review'
+                   			 } else {
+                        			sh './bob/bob init-release'
+                        			archiveArtifacts 'artifact.properties'
+                   			 }
+               			 }*/
+				sh './bob/bob init-dev'
+           		 }
+       		 }
+       		 stage('Lint') {
+            		steps {
+				echo "Lint Stage"
+                		//sh './bob/bob lint'
+            		}
+        	}
+		
+		stage('Test and Scan') {
+			steps {
+				echo "Unit testing, contract test, performance test, code analysis, code metrics."
+			}
+		}
+		
+		stage('Image') {
+          		steps {
+				echo 'building image stage'
+                		sh './bob/bob image'
+            		}
+       		 }
+
+		stage('Docker image upload and creating Helm charts') {
+			steps {
+				withDockerRegistry([credentialsId: 'docker-login-id', url: 'http://armdocker.rnd.ericsson.se']) {
+					echo 'logged in'
+				}
+				echo "Creating Helm Package and upload docker image"
+				sh './bob/bob package-local'
+			}
+		}
+        stage('K8S Install') {
+            when {
+                expression { env.RELEASE == "true" }
+            }
+            steps {
+                script {
+                    echo 'Initial install of the service helm chart:'
+                    sh "sudo kubectl create ns ${HELM_INSTALL_NAMESPACE} || true"
+                   /* sh "${KUBECTL_CMD} create secret docker-registry ${SERVICE_NAME}-secret \
+                        --docker-server=armdocker.rnd.ericsson.se \
+                        --docker-username=${CREDENTIALS_SEKA_ARTIFACTORY_USR} \
+                        --docker-password=${CREDENTIALS_SEKA_ARTIFACTORY_PSW} \
+                        -n ${HELM_INSTALL_NAMESPACE} || true"*/
+                        sh 'helm upgrade --install --namespace=${HELM_INSTALL_NAMESPACE} ${HELM_INSTALL_RELEASE_NAME} ${HELM_CHART_PACKAGED}'
+                  
+                }
+            }
+        }
+		stage('uploading helm charts') {
+			/*when {
+                		beforeAgent true 
+                		expression { (params.RELEASE=="true") } 
+           		 }*/
+			steps {
+				/*withDockerRegistry([credentialsId: 'docker-login-id', url: 'http://armdocker.rnd.ericsson.se']) {
+					echo 'logged in'
+				}*/
+				echo 'Publishing helm charts'
+				sh './bob/bob package'
+			}
+		}
+	}
+}

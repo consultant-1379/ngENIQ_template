@@ -1,0 +1,75 @@
+pipeline {
+    agent {
+	node("ngENIQ_POC")
+    }
+	stages {
+		stage('Prepare') {
+			steps {
+				echo "PrepareStage"
+				sh 'git clean -xdff'
+				sh 'git submodule sync'
+				sh 'git submodule update --init --recursive'
+				// Ensure that Bob has all of its dependencies.
+				sh './bob/bob -v'
+				}
+			}
+		 stage('Build') {
+         	  	 steps {
+				echo "Build Stage"
+               			 sh './bob/bob build'
+           			 }
+       			 }
+       	stage('sonar'){
+       	    steps{
+       	        sh './bob/bob sonar'
+       	    }
+       	}
+
+		stage('Init') {
+          	 	 steps {
+                		/*script {
+                    			if (env.RELEASE == 'false') {
+                        			sh './bob/bob init-review'
+                   			 } else {
+                        			sh './bob/bob init-release'
+                        			archiveArtifacts 'artifact.properties'
+                   			 }
+               			 }*/
+				sh './bob/bob init-dev'
+           		 }
+       		 }
+
+       		 stage('Lint') {
+            		steps {
+				echo "Lint Stage"
+                		//sh './bob/bob lint'
+            		}
+        	}
+
+		stage('Test and Scan') {
+			steps {
+				echo "Unit testing, contract test, performance test, code analysis, code metrics."
+			}
+		}
+
+		stage('Image') {
+          		steps {
+				echo 'building image stage'
+                		sh './bob/bob image'
+            		}
+       		 }
+		stage('Docker image upload and creating Helm charts') {
+			steps {
+				withDockerRegistry([credentialsId: 'docker-login-id', url: 'http://armdocker.rnd.ericsson.se']) {
+					echo 'logged in'
+				}
+				echo "Creating Helm Package and upload docker image"
+				sh './bob/bob package-local'
+			}
+		}
+
+
+		
+	}
+}
+

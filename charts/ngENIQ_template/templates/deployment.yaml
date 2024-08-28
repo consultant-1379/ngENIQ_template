@@ -1,0 +1,123 @@
+#
+# COPYRIGHT Ericsson 2020
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+apiVersion: v1
+data:
+  application.properties: |
+    management.endpoint.metrics.enabled=true
+    management.endpoints.web.exposure.include=*
+    management.endpoint.prometheus.enabled=true
+    management.metrics.export.prometheus.enabled=true
+    management.metrics.web.server.auto-time-requests=true
+kind: ConfigMap
+metadata:
+  name: {{ include "ngENIQ_template.name" . }}-configmap
+  labels:
+{{ include "ngENIQ_template.labels" . | indent 4 }}
+  annotations:
+{{ include "ngENIQ_template.product-info" . | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ngENIQ_template.fullname" . }}
+  labels:
+    {{- include "ngENIQ_template.labels" . | nindent 4 }}
+  annotations:
+   {{ include "ngENIQ_template.product-info" . | indent 4 }}
+spec:
+{{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+{{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "ngENIQ_template.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  strategy:
+    type: {{ .Values.updateStrategy.type }}
+    {{- if and (eq .Values.updateStrategy.type "RollingUpdate") .Values.updateStrategy.rollingUpdate }}
+    rollingUpdate:
+      maxUnavailable: {{ .Values.updateStrategy.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.updateStrategy.rollingUpdate.maxSurge }}
+    {{- end }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "ngENIQ_template.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/version: {{ include "ngENIQ_template.version" . }}
+      annotations:
+        prometheus.io/path: "{{ .Values.prometheus.path }}"
+        prometheus.io/port: "{{ .Values.service.port }}"
+        prometheus.io/scrape: "{{ .Values.prometheus.scrape }}"
+    spec:
+      {{- if include "ngENIQ_template.pullSecrets" . }}
+      imagePullSecrets:
+        - name: {{ template "ngENIQ_template.pullSecrets" . }}
+      {{- end }}
+      serviceAccountName: {{ include "ngENIQ_template.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "ngENIQ_template.name" . }}-configmap
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ template "ngENIQ_template.registryUrl" . }}/{{ template "ngENIQ_template.repoPath" . }}{{ .Values.images.chassis.name }}:{{ .Values.images.chassis.tag }}"
+          imagePullPolicy: {{ .Values.imageCredentials.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+              - all
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            initialDelaySeconds: 60 # Added initialDelaySeconds as the application is taking to come up
+            httpGet:
+              path: /actuator/health
+              port: http
+          readinessProbe:
+            initialDelaySeconds: 60 # Added initialDelaySeconds as the application is taking to come up
+            httpGet:
+              path: /actuator/health
+              port: http
+          env:
+          - name: TZ
+            value: {{ template "ngENIQ_template.timezone" . }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
